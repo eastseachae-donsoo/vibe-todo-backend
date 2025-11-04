@@ -19,19 +19,35 @@ app.use(helmet()); // 보안 헤더 추가
 // Referrer-Policy를 명시적으로 설정해 strict-origin-when-cross-origin 이슈 완화
 app.use(helmet.referrerPolicy({ policy: 'no-referrer' }));
 
-// 개발 편의 목적의 CORS 설정 (필요시 origin을 배포 도메인으로 제한)
+// CORS 설정 - 환경변수로 프론트엔드 URL 관리
 const allowedOrigins = [
+  // 개발 환경
   'http://localhost:3000',
   'http://localhost:5173',
   'http://localhost:5500',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:5173',
-  'http://127.0.0.1:5500'
+  'http://127.0.0.1:5500',
+  // 환경변수로 추가된 프론트엔드 URL들 (쉼표로 구분)
+  ...(process.env.FRONTEND_URLS ? process.env.FRONTEND_URLS.split(',').map(url => url.trim()) : [])
 ];
+
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // 모바일 앱/서버 간 통신 등 Origin 없음 허용
+    // Origin이 없는 요청 (Postman, 모바일 앱 등) 허용
+    if (!origin) return callback(null, true);
+    
+    // 허용된 Origin 목록에 있으면 허용
     if (allowedOrigins.includes(origin)) return callback(null, true);
+    
+    // 프로덕션 환경에서는 모든 Origin 허용하지 않음
+    // 개발 환경이나 특별한 경우를 위해 환경변수로 제어 가능
+    if (process.env.ALLOW_ALL_ORIGINS === 'true') {
+      return callback(null, true);
+    }
+    
+    // 그 외의 경우 거부
+    console.warn(`CORS 차단: ${origin}은 허용되지 않은 Origin입니다.`);
     return callback(null, false);
   },
   credentials: true,
@@ -44,14 +60,18 @@ app.use(cors(corsOptions)); // CORS 설정
 // Private Network 프리플라이트 허용 (Chrome 보안 정책 대응)
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') {
-    const origin = req.headers.origin || '*';
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Vary', 'Origin');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.header('Access-Control-Allow-Private-Network', 'true');
-    return res.sendStatus(204);
+    const origin = req.headers.origin;
+    // CORS 설정과 일치하도록 Origin 검증
+    if (!origin || allowedOrigins.includes(origin) || process.env.ALLOW_ALL_ORIGINS === 'true') {
+      res.header('Access-Control-Allow-Origin', origin || '*');
+      res.header('Vary', 'Origin');
+      res.header('Access-Control-Allow-Credentials', 'true');
+      res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.header('Access-Control-Allow-Private-Network', 'true');
+      return res.sendStatus(204);
+    }
+    return res.sendStatus(403); // 허용되지 않은 Origin
   }
   next();
 });
@@ -163,7 +183,15 @@ mongoose.connect(MONGODB_URI, {
   console.log('='.repeat(50));
   console.log('🎉 MongoDB 연결 성공!');
   console.log('='.repeat(50));
-  console.log(`📊 데이터베이스: ${MONGODB_URI}`);
+  // 보안을 위해 전체 URI 대신 호스트와 데이터베이스 이름만 표시
+  try {
+    const url = new URL(MONGODB_URI);
+    const host = url.hostname;
+    const dbName = url.pathname.slice(1) || 'default';
+    console.log(`📊 데이터베이스: ${host}/${dbName}`);
+  } catch (e) {
+    console.log(`📊 데이터베이스: 연결됨`);
+  }
   console.log(`⏰ 연결 시간: ${new Date().toLocaleString()}`);
   console.log('='.repeat(50));
 })
